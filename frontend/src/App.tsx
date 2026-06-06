@@ -6,7 +6,8 @@ import {
   FileTextOutlined,
   FileProtectOutlined,
   SearchOutlined,
-  AlertOutlined
+  AlertOutlined,
+  TeamOutlined
 } from '@ant-design/icons';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
@@ -15,6 +16,7 @@ import CertificateList from './pages/CertificateList';
 import ReportManagement from './pages/ReportManagement';
 import PatrolManagement from './pages/PatrolManagement';
 import AlertDashboard from './pages/AlertDashboard';
+import CooperativeManagement from './pages/CooperativeManagement';
 
 const { Header, Content, Sider } = Layout;
 
@@ -23,6 +25,7 @@ const App: React.FC = () => {
 
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">预警看板</Link> },
+    { key: '/cooperatives', icon: <TeamOutlined />, label: <Link to="/cooperatives">合作社管理</Link> },
     { key: '/apply', icon: <FileAddOutlined />, label: <Link to="/apply">授权申请</Link> },
     { key: '/certificates', icon: <FileProtectOutlined />, label: <Link to="/certificates">授权列表</Link> },
     { key: '/reports', icon: <FileTextOutlined />, label: <Link to="/reports">报告管理</Link> },
@@ -48,6 +51,7 @@ const App: React.FC = () => {
           <Content className="app-content">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/cooperatives" element={<CooperativeManagement />} />
               <Route path="/apply" element={<ApplicationForm />} />
               <Route path="/certificates" element={<CertificateList />} />
               <Route path="/reports" element={<ReportManagement />} />

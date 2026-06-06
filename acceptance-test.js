@@ -1,12 +1,20 @@
 const http = require('http');
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3001';
+const API_PREFIX = '/api';
+const API_BASE = API_BASE_URL + API_PREFIX;
+
+console.log(`📡 API 服务地址: ${API_BASE_URL}`);
+console.log(`🔗 API 前缀: ${API_PREFIX}`);
+console.log(`📍 完整 API 基础路径: ${API_BASE}\n`);
 
 function request(path, options = {}) {
   return new Promise((resolve, reject) => {
-    const url = new URL(path, API_BASE);
-    const req = http.request(
-      {
+    try {
+      const fullUrl = API_BASE + path;
+      const url = new URL(fullUrl);
+
+      const reqOptions = {
         hostname: url.hostname,
         port: url.port,
         path: url.pathname + url.search,
@@ -15,8 +23,9 @@ function request(path, options = {}) {
           'Content-Type': 'application/json',
           ...options.headers
         }
-      },
-      (res) => {
+      };
+
+      const req = http.request(reqOptions, (res) => {
         let data = '';
         res.on('data', (chunk) => (data += chunk));
         res.on('end', () => {
@@ -27,13 +36,19 @@ function request(path, options = {}) {
             resolve({ status: res.statusCode, data });
           }
         });
+      });
+
+      req.on('error', (err) => {
+        reject(new Error(`请求失败 [${options.method || 'GET'} ${fullUrl}]: ${err.message}`));
+      });
+
+      if (options.body) {
+        req.write(JSON.stringify(options.body));
       }
-    );
-    req.on('error', reject);
-    if (options.body) {
-      req.write(JSON.stringify(options.body));
+      req.end();
+    } catch (err) {
+      reject(err);
     }
-    req.end();
   });
 }
 
@@ -54,10 +69,14 @@ async function waitForServer() {
         console.log('✅ 服务已启动');
         return;
       }
-    } catch (e) {}
+    } catch (e) {
+      if (i % 5 === 4) {
+        console.log(`   等待中... (${(i + 1) * 2}秒)`);
+      }
+    }
     await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error('服务启动超时');
+  throw new Error(`服务启动超时，无法连接到 ${API_BASE_URL}`);
 }
 
 async function runAcceptanceTests() {
@@ -88,8 +107,12 @@ async function runAcceptanceTests() {
     });
     const coopPass = coopRes.status === 201;
     testCooperativeId = coopRes.data._id;
-    tests.push({ name: '创建合作社', pass: coopPass, detail: coopPass ? `ID: ${testCooperativeId}` : coopRes.data.error });
-    log('创建合作社', coopPass, coopPass ? `ID: ${testCooperativeId}` : coopRes.data.error);
+    tests.push({
+      name: '创建合作社',
+      pass: coopPass,
+      detail: coopPass ? `ID: ${testCooperativeId}` : coopRes.data.error || `HTTP ${coopRes.status}`
+    });
+    log('创建合作社', coopPass, coopPass ? `ID: ${testCooperativeId}` : coopRes.data.error || `HTTP ${coopRes.status}`);
 
     console.log('\n--- 测试 2: 创建保护范围内的地块 ---');
     const plotInRes = await request('/plot-boundaries', {
@@ -108,17 +131,21 @@ async function runAcceptanceTests() {
       }
     });
     const plotInPass =
-      plotInRes.status === 201 && plotInRes.data.plotBoundary.isWithinProtectionZone === true;
-    plotInsideZoneId = plotInRes.data.plotBoundary._id;
+      plotInRes.status === 201 && plotInRes.data.plotBoundary?.isWithinProtectionZone === true;
+    plotInsideZoneId = plotInRes.data.plotBoundary?._id;
     tests.push({
       name: '保护范围内地块创建并校验通过',
       pass: plotInPass,
-      detail: plotInPass ? `通过: ${plotInRes.data.validation.message}` : plotInRes.data.error
+      detail: plotInPass
+        ? `通过: ${plotInRes.data.validation?.message}`
+        : plotInRes.data.error || `HTTP ${plotInRes.status}`
     });
     log(
       '保护范围内地块创建并校验通过',
       plotInPass,
-      plotInPass ? plotInRes.data.validation.message : plotInRes.data.error
+      plotInPass
+        ? plotInRes.data.validation?.message
+        : plotInRes.data.error || `HTTP ${plotInRes.status}`
     );
 
     console.log('\n--- 测试 3: 创建保护范围外的地块 ---');
@@ -138,17 +165,21 @@ async function runAcceptanceTests() {
       }
     });
     const plotOutPass =
-      plotOutRes.status === 201 && plotOutRes.data.plotBoundary.isWithinProtectionZone === false;
-    plotOutsideZoneId = plotOutRes.data.plotBoundary._id;
+      plotOutRes.status === 201 && plotOutRes.data.plotBoundary?.isWithinProtectionZone === false;
+    plotOutsideZoneId = plotOutRes.data.plotBoundary?._id;
     tests.push({
       name: '保护范围外地块创建并校验不通过',
       pass: plotOutPass,
-      detail: plotOutPass ? `拒绝: ${plotOutRes.data.validation.message}` : plotOutRes.data.error
+      detail: plotOutPass
+        ? `拒绝: ${plotOutRes.data.validation?.message}`
+        : plotOutRes.data.error || `HTTP ${plotOutRes.status}`
     });
     log(
       '保护范围外地块创建并校验不通过',
       plotOutPass,
-      plotOutPass ? plotOutRes.data.validation.message : plotOutRes.data.error
+      plotOutPass
+        ? plotOutRes.data.validation?.message
+        : plotOutRes.data.error || `HTTP ${plotOutRes.status}`
     );
 
     console.log('\n--- 测试 4: 保护范围外地块申请授权 - 应失败 ---');
@@ -196,9 +227,15 @@ async function runAcceptanceTests() {
     tests.push({
       name: '创建有效检测报告',
       pass: validReportPass,
-      detail: validReportPass ? `状态: ${validReportRes.data.status}` : validReportRes.data.error
+      detail: validReportPass
+        ? `状态: ${validReportRes.data.status}`
+        : validReportRes.data.error || `HTTP ${validReportRes.status}`
     });
-    log('创建有效检测报告', validReportPass, validReportPass ? `状态: ${validReportRes.data.status}` : validReportRes.data.error);
+    log(
+      '创建有效检测报告',
+      validReportPass,
+      validReportPass ? `状态: ${validReportRes.data.status}` : validReportRes.data.error || `HTTP ${validReportRes.status}`
+    );
 
     console.log('\n--- 测试 6: 创建过期检测报告 ---');
     const expiredReportRes = await request('/inspection-reports', {
@@ -220,7 +257,9 @@ async function runAcceptanceTests() {
     tests.push({
       name: '过期检测报告自动标记为过期',
       pass: expiredReportPass,
-      detail: expiredReportPass ? `状态: ${expiredReportRes.data.status}` : expiredReportRes.data.error
+      detail: expiredReportPass
+        ? `状态: ${expiredReportRes.data.status}`
+        : expiredReportRes.data.error || `HTTP ${expiredReportRes.status}`
     });
     log(
       '过期检测报告自动标记为过期状态',
@@ -265,19 +304,21 @@ async function runAcceptanceTests() {
         batchNumber: 'BATCH-NORMAL-001'
       }
     });
-    const applyPass = applyRes.status === 201 && applyRes.data.certificate.status === 'pending';
-    certificateId = applyRes.data.certificate._id;
+    const applyPass = applyRes.status === 201 && applyRes.data.certificate?.status === 'pending';
+    certificateId = applyRes.data.certificate?._id;
     tests.push({
       name: '正常申请授权成功',
       pass: applyPass,
       detail: applyPass
-        ? `证书编号: ${applyRes.data.certificate.certificateNumber}`
-        : applyRes.data.error
+        ? `证书编号: ${applyRes.data.certificate?.certificateNumber}`
+        : applyRes.data.error || `HTTP ${applyRes.status}`
     });
     log(
       '正常条件下申请授权成功',
       applyPass,
-      applyPass ? `证书编号: ${applyRes.data.certificate.certificateNumber}` : applyRes.data.error
+      applyPass
+        ? `证书编号: ${applyRes.data.certificate?.certificateNumber}`
+        : applyRes.data.error || `HTTP ${applyRes.status}`
     );
 
     console.log('\n--- 测试 9: 同一批次重复申请 - 应失败 ---');
@@ -311,13 +352,21 @@ async function runAcceptanceTests() {
       method: 'POST',
       body: { approvedBy: '验收测试员' }
     });
-    const approvePass = approveRes.status === 200 && approveRes.data.certificate.status === 'approved';
+    const approvePass = approveRes.status === 200 && approveRes.data.certificate?.status === 'approved';
     tests.push({
       name: '品牌管理员批准授权',
       pass: approvePass,
-      detail: approvePass ? `状态: ${approveRes.data.certificate.status}` : approveRes.data.error
+      detail: approvePass
+        ? `状态: ${approveRes.data.certificate?.status}`
+        : approveRes.data.error || `HTTP ${approveRes.status}`
     });
-    log('品牌管理员批准授权', approvePass, approvePass ? `状态: ${approveRes.data.certificate.status}` : approveRes.data.error);
+    log(
+      '品牌管理员批准授权',
+      approvePass,
+      approvePass
+        ? `状态: ${approveRes.data.certificate?.status}`
+        : approveRes.data.error || `HTTP ${approveRes.status}`
+    );
 
     console.log('\n--- 测试 11: 记录异常巡查 ---');
     const patrolRes = await request('/patrol-records', {
@@ -336,12 +385,16 @@ async function runAcceptanceTests() {
     tests.push({
       name: '监管人员记录异常巡查',
       pass: patrolPass,
-      detail: patrolPass ? `结果: ${patrolRes.data.patrolRecord.result}` : patrolRes.data.error
+      detail: patrolPass
+        ? `结果: ${patrolRes.data.patrolRecord?.result}`
+        : patrolRes.data.error || `HTTP ${patrolRes.status}`
     });
     log(
       '监管人员记录异常巡查',
       patrolPass,
-      patrolPass ? `结果: ${patrolRes.data.patrolRecord.result}` : patrolRes.data.error
+      patrolPass
+        ? `结果: ${patrolRes.data.patrolRecord?.result}`
+        : patrolRes.data.error || `HTTP ${patrolRes.status}`
     );
 
     console.log('\n--- 测试 12: 巡查异常后新增用标登记 - 应暂停 ---');
@@ -380,7 +433,7 @@ async function runAcceptanceTests() {
       pass: statsPass,
       detail: statsPass
         ? `合作社: ${statsRes.data.statistics.totalCooperatives}, 证书: ${statsRes.data.statistics.totalCertificates}`
-        : statsRes.status
+        : `HTTP ${statsRes.status}`
     });
     log(
       '预警看板数据查询成功',
@@ -392,7 +445,9 @@ async function runAcceptanceTests() {
 
     console.log('\n--- 测试 14: 查询过期报告状态 ---');
     const reportsRes = await request('/inspection-reports');
-    const expiredInList = reportsRes.data.find((r) => r._id === expiredReportId);
+    const expiredInList = Array.isArray(reportsRes.data)
+      ? reportsRes.data.find((r) => r._id === expiredReportId)
+      : null;
     const reportStatusPass = expiredInList && expiredInList.status === 'expired';
     tests.push({
       name: '报告列表中过期报告状态正确',
@@ -421,9 +476,13 @@ async function runAcceptanceTests() {
     console.log('3. ✅ 巡查异常后新增用标登记被暂停 - 已验证');
     console.log('4. ✅ 同一批次不能重复申请证书 - 已验证');
 
+    console.log('\n💡 提示: 可通过环境变量 API_BASE_URL 自定义服务地址');
+    console.log(`   示例: API_BASE_URL=http://your-server:3001 npm run test:acceptance`);
+
     process.exit(passed === total ? 0 : 1);
   } catch (error) {
     console.error('\n❌ 测试执行出错:', error.message);
+    console.error(error.stack);
     process.exit(1);
   }
 }
