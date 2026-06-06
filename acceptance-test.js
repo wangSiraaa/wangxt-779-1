@@ -90,6 +90,7 @@ async function runAcceptanceTests() {
   let validReportId = null;
   let expiredReportId = null;
   let certificateId = null;
+  let expiredReportForVerifyId = null;
 
   const tests = [];
 
@@ -460,6 +461,209 @@ async function runAcceptanceTests() {
       reportStatusPass ? `状态: ${expiredInList.status}` : '未正确显示过期状态'
     );
 
+    console.log('\n--- 测试 15: 创建用于核验的过期检测报告 ---');
+    const expiredVerifyReportRes = await request('/inspection-reports', {
+      method: 'POST',
+      body: {
+        cooperativeId: testCooperativeId,
+        plotBoundaryId: plotInsideZoneId,
+        plotCode: 'PLOT-VERIFY-001',
+        reportNumber: 'REP-EXPIRED-VERIFY-001',
+        variety: '五常大米',
+        batchNumber: 'BATCH-VERIFY-EXPIRED',
+        reportDate: '2020-01-01',
+        validUntil: '2021-01-01',
+        issuedBy: '国家粮食质量检测中心',
+        status: 'pending'
+      }
+    });
+    const expiredVerifyReportPass = expiredVerifyReportRes.status === 201;
+    expiredReportForVerifyId = expiredVerifyReportRes.data._id;
+    tests.push({
+      name: '创建用于核验的过期检测报告',
+      pass: expiredVerifyReportPass,
+      detail: expiredVerifyReportPass
+        ? `报告ID: ${expiredReportForVerifyId}`
+        : expiredVerifyReportRes.data.error || `HTTP ${expiredVerifyReportRes.status}`
+    });
+    log(
+      '创建用于核验的过期检测报告',
+      expiredVerifyReportPass,
+      expiredVerifyReportPass ? `报告ID: ${expiredReportForVerifyId}` : '创建失败'
+    );
+
+    console.log('\n--- 测试 16: 核验过期检测报告 - 应失败并生成巡查预警 ---');
+    const verifyExpiredRes = await request(`/inspection-reports/${expiredReportForVerifyId}/verify`, {
+      method: 'POST',
+      body: {
+        expectedBatchNumber: 'BATCH-VERIFY-EXPIRED',
+        expectedPlotCode: 'PLOT-VERIFY-001'
+      }
+    });
+    const verifyExpiredPass =
+      verifyExpiredRes.status === 200 &&
+      verifyExpiredRes.data.success === false &&
+      verifyExpiredRes.data.verificationStatus === 'failed' &&
+      verifyExpiredRes.data.verificationResult?.expiryValid === false;
+    tests.push({
+      name: '过期检测报告核验失败',
+      pass: verifyExpiredPass,
+      detail: verifyExpiredPass
+        ? `失败原因: ${verifyExpiredRes.data.verificationResult?.failureReasons?.join(', ')}`
+        : `错误: ${JSON.stringify(verifyExpiredRes.data)}`
+    });
+    log(
+      '过期检测报告核验失败（业务规则：报告有效期必须在有效期内）',
+      verifyExpiredPass,
+      verifyExpiredPass
+        ? `失败原因: ${verifyExpiredRes.data.verificationResult?.failureReasons?.join(', ')}`
+        : '未正确核验'
+    );
+
+    console.log('\n--- 测试 17: 核验失败后检查巡查预警记录 ---');
+    const patrolsAfterVerifyRes = await request('/patrol-records', {
+      method: 'GET'
+    });
+    const patrolsAfterVerify = Array.isArray(patrolsAfterVerifyRes.data)
+      ? patrolsAfterVerifyRes.data
+      : [];
+    const reportVerifyPatrol = patrolsAfterVerify.find(
+      (p) => p.source === 'report_verification' && p.inspectionReportId === expiredReportForVerifyId
+    );
+    const patrolRecordPass = !!reportVerifyPatrol && reportVerifyPatrol.result === 'warning';
+    tests.push({
+      name: '核验失败自动生成巡查预警记录',
+      pass: patrolRecordPass,
+      detail: patrolRecordPass
+        ? `来源: ${reportVerifyPatrol.source}, 详情: ${reportVerifyPatrol.sourceDetail}`
+        : '未找到自动生成的巡查预警记录'
+    });
+    log(
+      '核验失败自动生成巡查预警记录（业务规则：报告核验不合格自动在巡查预警中留痕）',
+      patrolRecordPass,
+      patrolRecordPass
+        ? `来源: ${reportVerifyPatrol.source}, 详情: ${reportVerifyPatrol.sourceDetail}`
+        : '未生成巡查预警记录'
+    );
+
+    console.log('\n--- 测试 18: 过期报告申请授权 - 应被核验拦截 ---');
+    const expiredVerifyApplyRes = await request('/authorization-certificates/apply', {
+      method: 'POST',
+      body: {
+        cooperativeId: testCooperativeId,
+        plotBoundaryId: plotInsideZoneId,
+        inspectionReportId: expiredReportForVerifyId,
+        variety: '五常大米',
+        batchNumber: 'BATCH-VERIFY-EXPIRED-APPLY',
+        plotCode: 'PLOT-VERIFY-001'
+      }
+    });
+    const expiredVerifyApplyPass =
+      expiredVerifyApplyRes.status === 400 &&
+      expiredVerifyApplyRes.data.code === 'REPORT_VERIFICATION_FAILED';
+    tests.push({
+      name: '核验不合格报告申请授权被拒绝',
+      pass: expiredVerifyApplyPass,
+      detail: expiredVerifyApplyPass
+        ? `拒绝原因: ${expiredVerifyApplyRes.data.error}`
+        : `错误: ${expiredVerifyApplyRes.data.error || expiredVerifyApplyRes.status}`
+    });
+    log(
+      '核验不合格报告申请授权被拒绝（业务规则：报告核验不合格不能申请授权）',
+      expiredVerifyApplyPass,
+      expiredVerifyApplyPass ? expiredVerifyApplyRes.data.error : '未正确拦截'
+    );
+
+    console.log('\n--- 测试 19: 检查授权证书未生成 ---');
+    const certsAfterFailedApplyRes = await request('/authorization-certificates', {
+      method: 'GET'
+    });
+    const certsList = Array.isArray(certsAfterFailedApplyRes.data)
+      ? certsAfterFailedApplyRes.data
+      : [];
+    const failedBatchCert = certsList.find(
+      (c) => c.batchNumber === 'BATCH-VERIFY-EXPIRED-APPLY'
+    );
+    const certNotGeneratedPass = !failedBatchCert;
+    tests.push({
+      name: '申请失败时授权证书未生成',
+      pass: certNotGeneratedPass,
+      detail: certNotGeneratedPass
+        ? '未生成证书'
+        : `错误: 已生成证书 ${failedBatchCert?._id}`
+    });
+    log(
+      '申请失败时授权证书未生成',
+      certNotGeneratedPass,
+      certNotGeneratedPass ? '验证通过' : '错误地生成了证书'
+    );
+
+    console.log('\n--- 测试 20: 保护范围外地块申请 - 显示具体失败原因 ---');
+    const outsideZoneDetailRes = await request('/authorization-certificates/apply', {
+      method: 'POST',
+      body: {
+        cooperativeId: testCooperativeId,
+        plotBoundaryId: plotOutsideZoneId,
+        inspectionReportId: validReportId,
+        variety: '五常大米',
+        batchNumber: 'BATCH-OUTSIDE-DETAIL-001'
+      }
+    });
+    const outsideZoneDetailPass =
+      outsideZoneDetailRes.status === 400 &&
+      outsideZoneDetailRes.data.code === 'OUTSIDE_PROTECTION_ZONE' &&
+      outsideZoneDetailRes.data.detail &&
+      outsideZoneDetailRes.data.error.includes('不在地理标志保护范围内');
+    tests.push({
+      name: '保护范围外地块申请显示具体失败原因',
+      pass: outsideZoneDetailPass,
+      detail: outsideZoneDetailPass
+        ? `失败原因: ${outsideZoneDetailRes.data.error}`
+        : `错误: ${outsideZoneDetailRes.data.error || outsideZoneDetailRes.status}`
+    });
+    log(
+      '保护范围外地块申请显示具体失败原因（业务规则：范围外地块需给出明确失败原因）',
+      outsideZoneDetailPass,
+      outsideZoneDetailPass
+        ? `失败详情: ${outsideZoneDetailRes.data.error}`
+        : '未显示具体失败原因'
+    );
+
+    console.log('\n--- 测试 21: 核验失败后用标登记按钮应暂停 ---');
+    const labelUsageWithFailedReportRes = await request('/label-usages', {
+      method: 'POST',
+      body: {
+        cooperativeId: testCooperativeId,
+        certificateId: certificateId,
+        batchNumber: 'BATCH-LABEL-FAILED-REPORT',
+        variety: '五常大米',
+        quantity: 500,
+        labelType: '地理标志专用标',
+        useDate: new Date().toISOString()
+      }
+    });
+    let labelUsageSuspendedPass = false;
+    if (labelUsageWithFailedReportRes.status === 400) {
+      const errorCode = labelUsageWithFailedReportRes.data.code;
+      labelUsageSuspendedPass =
+        errorCode === 'PATROL_ABNORMAL_SUSPENDED' ||
+        errorCode === 'REPORT_VERIFICATION_SUSPENDED';
+    }
+    tests.push({
+      name: '用标登记在异常时进入暂停态',
+      pass: labelUsageSuspendedPass,
+      detail: labelUsageSuspendedPass
+        ? `暂停原因: ${labelUsageWithFailedReportRes.data.error}`
+        : `错误: ${labelUsageWithFailedReportRes.data.error || labelUsageWithFailedReportRes.status}`
+    });
+    log(
+      '用标登记在异常时进入暂停态（业务规则：报告核验不合格或巡查异常时，用标登记暂停）',
+      labelUsageSuspendedPass,
+      labelUsageSuspendedPass
+        ? `暂停原因: ${labelUsageWithFailedReportRes.data.error}`
+        : '未正确进入暂停态'
+    );
+
     console.log('\n========== 测试结果汇总 ==========\n');
     const passed = tests.filter((t) => t.pass).length;
     const total = tests.length;
@@ -475,6 +679,11 @@ async function runAcceptanceTests() {
     console.log('2. ✅ 检测报告过期必须重新上传 - 已验证');
     console.log('3. ✅ 巡查异常后新增用标登记被暂停 - 已验证');
     console.log('4. ✅ 同一批次不能重复申请证书 - 已验证');
+    console.log('5. ✅ 检测报告附件核验（有效期、批次号、地块编号）- 已验证');
+    console.log('6. ✅ 核验不合格时用标登记按钮进入暂停态 - 已验证');
+    console.log('7. ✅ 核验不合格自动在巡查预警中留痕并显示来源 - 已验证');
+    console.log('8. ✅ 保护范围外地块申请给出具体失败原因 - 已验证');
+    console.log('9. ✅ 申请失败时授权证书不生成 - 已验证');
 
     console.log('\n💡 提示: 可通过环境变量 API_BASE_URL 自定义服务地址');
     console.log(`   示例: API_BASE_URL=http://your-server:3001 npm run test:acceptance`);

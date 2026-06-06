@@ -1,7 +1,122 @@
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { polygon, point } from '@turf/helpers';
 import ProtectionZone from '../models/ProtectionZone';
+import PlotBoundary from '../models/PlotBoundary';
+import InspectionReport from '../models/InspectionReport';
+import PatrolRecord from '../models/PatrolRecord';
 import { ICoordinate } from '../models/PlotBoundary';
+import { Types } from 'mongoose';
+
+export interface IVerificationResult {
+  success: boolean;
+  verificationStatus: 'verified' | 'failed';
+  verificationResult: {
+    expiryValid: boolean;
+    batchNumberMatched: boolean;
+    plotCodeMatched: boolean;
+    plotWithinZone: boolean;
+    failureReasons: string[];
+  };
+}
+
+export const verifyInspectionReport = async (
+  reportId: string | Types.ObjectId,
+  expectedBatchNumber?: string,
+  expectedPlotCode?: string
+): Promise<IVerificationResult> => {
+  const report = await InspectionReport.findById(reportId);
+  if (!report) {
+    throw new Error('检测报告不存在');
+  }
+
+  const failureReasons: string[] = [];
+  const now = new Date();
+
+  const expiryValid = report.validUntil > now;
+  if (!expiryValid) {
+    failureReasons.push('检测报告已过期');
+  }
+
+  let batchNumberMatched = true;
+  if (expectedBatchNumber) {
+    batchNumberMatched = report.batchNumber === expectedBatchNumber;
+    if (!batchNumberMatched) {
+      failureReasons.push(`报告批次号(${report.batchNumber})与申请批次号(${expectedBatchNumber})不匹配`);
+    }
+  }
+
+  let plotCodeMatched = true;
+  let plotWithinZone = true;
+
+  if (report.plotBoundaryId) {
+    const plot = await PlotBoundary.findById(report.plotBoundaryId);
+    if (plot) {
+      if (expectedPlotCode && report.plotCode) {
+        plotCodeMatched = report.plotCode === expectedPlotCode;
+        if (!plotCodeMatched) {
+          failureReasons.push(`报告地块编号(${report.plotCode})与申请地块编号(${expectedPlotCode})不匹配`);
+        }
+      }
+      plotWithinZone = plot.isWithinProtectionZone;
+      if (!plotWithinZone) {
+        failureReasons.push(`地块(${plot.name})不在地理标志保护范围内`);
+      }
+    }
+  } else if (expectedPlotCode) {
+    plotCodeMatched = false;
+    failureReasons.push('报告未关联地块信息');
+  }
+
+  const success = expiryValid && batchNumberMatched && plotCodeMatched && plotWithinZone;
+
+  report.verificationStatus = success ? 'verified' : 'failed';
+  report.verificationResult = {
+    expiryValid,
+    batchNumberMatched,
+    plotCodeMatched,
+    plotWithinZone,
+    failureReasons
+  };
+  report.verifiedAt = new Date();
+  report.verifiedBy = 'system';
+  await report.save();
+
+  if (!success) {
+    await createPatrolWarningFromReport(report, failureReasons);
+  }
+
+  return {
+    success,
+    verificationStatus: success ? 'verified' : 'failed',
+    verificationResult: {
+      expiryValid,
+      batchNumberMatched,
+      plotCodeMatched,
+      plotWithinZone,
+      failureReasons
+    }
+  };
+};
+
+const createPatrolWarningFromReport = async (
+  report: any,
+  failureReasons: string[]
+) => {
+  const patrolRecord = new PatrolRecord({
+    cooperativeId: report.cooperativeId,
+    plotBoundaryId: report.plotBoundaryId,
+    inspectionReportId: report._id,
+    inspectorName: '系统自动',
+    patrolDate: new Date(),
+    result: 'warning',
+    source: 'report_verification',
+    sourceDetail: '检测报告附件核验不合格',
+    description: `检测报告(${report.reportNumber})核验不合格：${failureReasons.join('；')}`,
+    findings: failureReasons,
+    correctiveActions: '请合作社重新上传有效的检测报告'
+  });
+  await patrolRecord.save();
+};
 
 export const isPlotWithinProtectionZone = async (
   plotCoordinates: ICoordinate[]

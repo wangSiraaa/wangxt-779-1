@@ -52,6 +52,8 @@ const ApplicationForm: React.FC = () => {
   const [cooperatives, setCooperatives] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [reportVerificationResult, setReportVerificationResult] = useState<any>(null);
+  const [isReportVerifying, setIsReportVerifying] = useState(false);
   const [form] = Form.useForm();
   const [plotForm] = Form.useForm();
   const [reportForm] = Form.useForm();
@@ -120,6 +122,7 @@ const ApplicationForm: React.FC = () => {
       const appData = await form.validateFields();
 
       setLoading(true);
+      setReportVerificationResult(null);
 
       const plotRes = await apiService.createPlotBoundary({
         ...plotData,
@@ -131,6 +134,7 @@ const ApplicationForm: React.FC = () => {
         ...reportData,
         cooperativeId: appData.cooperativeId,
         plotBoundaryId: plotRes.data.plotBoundary._id,
+        plotCode: reportData.plotCode,
         reportDate: reportData.reportDate.toDate(),
         validUntil: reportData.validUntil.toDate()
       });
@@ -140,7 +144,8 @@ const ApplicationForm: React.FC = () => {
         plotBoundaryId: plotRes.data.plotBoundary._id,
         inspectionReportId: reportRes.data._id,
         variety: plotData.variety,
-        batchNumber: appData.batchNumber
+        batchNumber: appData.batchNumber,
+        plotCode: reportData.plotCode
       });
 
       message.success('授权申请提交成功！');
@@ -149,13 +154,24 @@ const ApplicationForm: React.FC = () => {
       if (error.response?.data?.code) {
         const errorCode = error.response.data.code;
         const errorMessages: Record<string, string> = {
-          OUTSIDE_PROTECTION_ZONE: '地块不在保护范围内，无法授权',
+          OUTSIDE_PROTECTION_ZONE: error.response.data.error || '地块不在保护范围内，无法授权',
           REPORT_EXPIRED: '检测报告已过期，请重新上传',
+          REPORT_VERIFICATION_FAILED: error.response.data.error || '检测报告核验不合格',
+          REPORT_VERIFICATION_SUSPENDED: error.response.data.error || '检测报告核验未通过，用标登记已暂停',
+          REPORT_EXPIRED_SUSPENDED: error.response.data.error || '检测报告已过期，用标登记已暂停',
           PATROL_ABNORMAL_SUSPENDED: '近30天内存在巡查异常记录，新增用标登记已暂停',
           DUPLICATE_BATCH: '该批次已申请过授权证书，不能重复申请',
-          COOPERATIVE_SUSPENDED: '合作社已被暂停授权'
+          COOPERATIVE_SUSPENDED: error.response.data.error || '合作社已被暂停授权'
         };
-        message.error(errorMessages[errorCode] || error.response.data.error);
+        const errorMsg = errorMessages[errorCode] || error.response.data.error;
+        message.error(errorMsg);
+        
+        if (errorCode === 'REPORT_VERIFICATION_FAILED' && error.response.data.detail) {
+          setReportVerificationResult({
+            success: false,
+            verificationResult: error.response.data.detail
+          });
+        }
       } else {
         message.error('提交失败：' + (error.message || '未知错误'));
       }
@@ -321,69 +337,103 @@ const ApplicationForm: React.FC = () => {
         )}
 
         {currentStep === 1 && (
-          <Form form={reportForm} layout="vertical">
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item
-                  label="报告编号"
-                  name="reportNumber"
-                  rules={[{ required: true, message: '请输入报告编号' }]}
-                >
-                  <Input placeholder="请输入检测报告编号" />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item
-                  label="检测机构"
-                  name="issuedBy"
-                  rules={[{ required: true, message: '请输入检测机构' }]}
-                >
-                  <Input placeholder="请输入检测机构名称" />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item
-                  label="品种"
-                  name="variety"
-                  rules={[{ required: true, message: '请输入品种' }]}
-                >
-                  <Input placeholder="请输入检测品种" />
-                </Form.Item>
-              </Col>
-            </Row>
-            <Row gutter={16}>
-              <Col span={8}>
-                <Form.Item
-                  label="批次号"
-                  name="batchNumber"
-                  rules={[{ required: true, message: '请输入批次号' }]}
-                >
-                  <Input placeholder="请输入批次号" />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item
-                  label="报告日期"
-                  name="reportDate"
-                  rules={[{ required: true, message: '请选择报告日期' }]}
-                >
-                  <DatePicker style={{ width: '100%' }} />
-                </Form.Item>
-              </Col>
-              <Col span={8}>
-                <Form.Item
-                  label="有效期至"
-                  name="validUntil"
-                  rules={[{ required: true, message: '请选择有效期' }]}
-                >
-                  <DatePicker style={{ width: '100%' }} />
-                </Form.Item>
-              </Col>
-            </Row>
-            <Form.Item label="备注" name="remark">
-              <TextArea rows={3} placeholder="可选：备注信息" />
-            </Form.Item>
-          </Form>
+          <div>
+            <Form form={reportForm} layout="vertical">
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item
+                    label="报告编号"
+                    name="reportNumber"
+                    rules={[{ required: true, message: '请输入报告编号' }]}
+                  >
+                    <Input placeholder="请输入检测报告编号" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="检测机构"
+                    name="issuedBy"
+                    rules={[{ required: true, message: '请输入检测机构' }]}
+                  >
+                    <Input placeholder="请输入检测机构名称" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="品种"
+                    name="variety"
+                    rules={[{ required: true, message: '请输入品种' }]}
+                  >
+                    <Input placeholder="请输入检测品种" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item
+                    label="批次号"
+                    name="batchNumber"
+                    rules={[{ required: true, message: '请输入批次号' }]}
+                  >
+                    <Input placeholder="请输入批次号" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="地块编号"
+                    name="plotCode"
+                  >
+                    <Input placeholder="请输入地块编号（可选）" />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item
+                    label="报告日期"
+                    name="reportDate"
+                    rules={[{ required: true, message: '请选择报告日期' }]}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item
+                    label="有效期至"
+                    name="validUntil"
+                    rules={[{ required: true, message: '请选择有效期' }]}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item label="备注" name="remark">
+                <TextArea rows={3} placeholder="可选：备注信息" />
+              </Form.Item>
+            </Form>
+
+            {reportVerificationResult && !reportVerificationResult.success && (
+              <Alert
+                message="❌ 检测报告核验不合格"
+                description={
+                  <div>
+                    <p>核验失败原因：</p>
+                    <ul>
+                      {reportVerificationResult.verificationResult?.failureReasons?.map((reason: string, idx: number) => (
+                        <li key={idx}>{reason}</li>
+                      ))}
+                    </ul>
+                    <p style={{ marginTop: 8, color: '#faad14' }}>
+                      ⚠️ 用标登记按钮已暂停，请修正报告信息后重新提交
+                    </p>
+                  </div>
+                }
+                type="error"
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
+            )}
+          </div>
         )}
 
         {currentStep === 2 && (
@@ -428,8 +478,20 @@ const ApplicationForm: React.FC = () => {
                 上一步
               </Button>
             )}
-            <Button type="primary" onClick={nextStep} loading={loading}>
-              {currentStep === 2 ? '提交申请' : '下一步'}
+            <Button
+              type="primary"
+              onClick={nextStep}
+              loading={loading || isReportVerifying}
+              disabled={
+                reportVerificationResult &&
+                !reportVerificationResult.success
+              }
+            >
+              {reportVerificationResult && !reportVerificationResult.success
+                ? '已暂停（请修正报告）'
+                : currentStep === 2
+                ? '提交申请'
+                : '下一步'}
             </Button>
           </div>
         )}

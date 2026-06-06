@@ -36,6 +36,8 @@ export const apiService = {
   getInspectionReports: (cooperativeId?: string) => 
     api.get('/inspection-reports', { params: { cooperativeId } }),
   createInspectionReport: (data: any) => api.post('/inspection-reports', data),
+  verifyInspectionReport: (id: string, data?: any) => 
+    api.post(`/inspection-reports/${id}/verify`, data),
   
   getCertificates: (params?: any) => api.get('/authorization-certificates', { params }),
   getCertificate: (id: string) => api.get(`/authorization-certificates/${id}`),

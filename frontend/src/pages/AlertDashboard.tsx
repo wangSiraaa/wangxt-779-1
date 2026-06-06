@@ -85,6 +85,26 @@ const AlertDashboard: React.FC = () => {
     });
   }
 
+  const getSourceLabel = (source: string) => {
+    const sourceMap: Record<string, string> = {
+      manual: '人工录入',
+      report_verification: '检测报告核验',
+      plot_validation: '地块范围校验',
+      system_auto: '系统自动'
+    };
+    return sourceMap[source] || source;
+  };
+
+  const getSourceTagColor = (source: string) => {
+    const colorMap: Record<string, string> = {
+      manual: 'blue',
+      report_verification: 'orange',
+      plot_validation: 'purple',
+      system_auto: 'default'
+    };
+    return colorMap[source] || 'default';
+  };
+
   if (abnormalPatrols.length > 0) {
     alerts.push({
       type: 'warning',
@@ -92,7 +112,15 @@ const AlertDashboard: React.FC = () => {
       description: '近期存在异常巡查，请关注整改情况',
       list: abnormalPatrols.slice(0, 5).map((p) => ({
         name: p.cooperativeId?.name || '未知合作社',
-        reason: p.description,
+        reason: (
+          <span>
+            <Tag color={getSourceTagColor(p.source)} style={{ marginRight: 8 }}>
+              {getSourceLabel(p.source)}
+            </Tag>
+            {p.description}
+            {p.sourceDetail && <span style={{ color: '#999' }}>（{p.sourceDetail}）</span>}
+          </span>
+        ),
         date: dayjs(p.patrolDate).format('YYYY-MM-DD')
       }))
     });

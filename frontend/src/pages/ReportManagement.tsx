@@ -60,6 +60,18 @@ const ReportManagement: React.FC = () => {
     return new Date(validUntil) < new Date();
   };
 
+  const getVerificationStatusTag = (verificationStatus: string) => {
+    switch (verificationStatus) {
+      case 'verified':
+        return <Tag color="green">核验通过</Tag>;
+      case 'failed':
+        return <Tag color="red">核验失败</Tag>;
+      case 'pending':
+      default:
+        return <Tag color="orange">待核验</Tag>;
+    }
+  };
+
   const getStatusTag = (status: string, validUntil: string) => {
     if (isExpired(validUntil) || status === 'expired') {
       return <Tag color="red">已过期</Tag>;
@@ -96,15 +108,15 @@ const ReportManagement: React.FC = () => {
       key: 'batchNumber'
     },
     {
+      title: '地块编号',
+      dataIndex: 'plotCode',
+      key: 'plotCode',
+      render: (code: string) => code || '-'
+    },
+    {
       title: '检测机构',
       dataIndex: 'issuedBy',
       key: 'issuedBy'
-    },
-    {
-      title: '报告日期',
-      dataIndex: 'reportDate',
-      key: 'reportDate',
-      render: (date: string) => dayjs(date).format('YYYY-MM-DD')
     },
     {
       title: '有效期至',
@@ -113,9 +125,14 @@ const ReportManagement: React.FC = () => {
       render: (date: string) => dayjs(date).format('YYYY-MM-DD')
     },
     {
-      title: '状态',
+      title: '报告状态',
       key: 'status',
       render: (_: any, record: any) => getStatusTag(record.status, record.validUntil)
+    },
+    {
+      title: '核验状态',
+      key: 'verificationStatus',
+      render: (_: any, record: any) => getVerificationStatusTag(record.verificationStatus)
     },
     {
       title: '上传时间',
@@ -206,6 +223,15 @@ const ReportManagement: React.FC = () => {
               style={{ flex: 1 }}
             >
               <Input placeholder="请输入批次号" />
+            </Form.Item>
+          </div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            <Form.Item
+              label="地块编号"
+              name="plotCode"
+              style={{ flex: 1 }}
+            >
+              <Input placeholder="请输入地块编号（可选）" />
             </Form.Item>
           </div>
           <div style={{ display: 'flex', gap: 16 }}>

@@ -10,7 +10,8 @@ import {
   isPlotWithinProtectionZone,
   isReportExpired,
   generateCertificateNumber,
-  hasAbnormalPatrolRecently
+  hasAbnormalPatrolRecently,
+  verifyInspectionReport
 } from './services/businessRules';
 
 const router = Router();
@@ -115,6 +116,20 @@ router.post('/inspection-reports', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/inspection-reports/:id/verify', async (req: Request, res: Response) => {
+  try {
+    const { expectedBatchNumber, expectedPlotCode } = req.body;
+    const result = await verifyInspectionReport(
+      req.params.id,
+      expectedBatchNumber,
+      expectedPlotCode
+    );
+    res.json(result);
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 router.get('/inspection-reports', async (req: Request, res: Response) => {
   try {
     const { cooperativeId } = req.query;
@@ -138,7 +153,7 @@ router.get('/inspection-reports', async (req: Request, res: Response) => {
 
 router.post('/authorization-certificates/apply', async (req: Request, res: Response) => {
   try {
-    const { cooperativeId, plotBoundaryId, inspectionReportId, variety, batchNumber } = req.body;
+    const { cooperativeId, plotBoundaryId, inspectionReportId, variety, batchNumber, plotCode } = req.body;
 
     const existingCert = await AuthorizationCertificate.findOne({
       cooperativeId,
@@ -156,9 +171,15 @@ router.post('/authorization-certificates/apply', async (req: Request, res: Respo
       return res.status(404).json({ error: '地块不存在' });
     }
     if (!plotBoundary.isWithinProtectionZone) {
+      const zoneCheck = await isPlotWithinProtectionZone(plotBoundary.coordinates);
       return res.status(400).json({
-        error: '地块不在保护范围内，无法授权',
-        code: 'OUTSIDE_PROTECTION_ZONE'
+        error: `地块「${plotBoundary.name}」不在地理标志保护范围内。${zoneCheck.message}`,
+        code: 'OUTSIDE_PROTECTION_ZONE',
+        detail: {
+          plotName: plotBoundary.name,
+          validationResult: plotBoundary.validationResult,
+          zoneMessage: zoneCheck.message
+        }
       });
     }
 
@@ -166,10 +187,19 @@ router.post('/authorization-certificates/apply', async (req: Request, res: Respo
     if (!report) {
       return res.status(404).json({ error: '检测报告不存在' });
     }
-    if (isReportExpired(report.validUntil)) {
+
+    const verificationResult = await verifyInspectionReport(
+      inspectionReportId,
+      batchNumber,
+      plotCode
+    );
+
+    if (!verificationResult.success) {
+      const reasons = verificationResult.verificationResult.failureReasons.join('；');
       return res.status(400).json({
-        error: '检测报告已过期，请重新上传',
-        code: 'REPORT_EXPIRED'
+        error: `检测报告核验不合格：${reasons}`,
+        code: 'REPORT_VERIFICATION_FAILED',
+        detail: verificationResult.verificationResult
       });
     }
 
@@ -325,6 +355,24 @@ router.post('/label-usages', async (req: Request, res: Response) => {
     }
     if (certificate.validUntil < new Date()) {
       return res.status(400).json({ error: '授权证书已过期' });
+    }
+
+    const report = await InspectionReport.findById(certificate.inspectionReportId);
+    if (report) {
+      if (report.verificationStatus === 'failed' || report.verificationStatus === 'pending') {
+        const failureReasons = report.verificationResult?.failureReasons || ['检测报告未完成核验'];
+        return res.status(400).json({
+          error: `检测报告核验未通过，用标登记已暂停：${failureReasons.join('；')}`,
+          code: 'REPORT_VERIFICATION_SUSPENDED',
+          detail: report.verificationResult
+        });
+      }
+      if (isReportExpired(report.validUntil)) {
+        return res.status(400).json({
+          error: '检测报告已过期，请重新上传有效报告后再登记用标',
+          code: 'REPORT_EXPIRED_SUSPENDED'
+        });
+      }
     }
 
     const labelUsage = new LabelUsage({
